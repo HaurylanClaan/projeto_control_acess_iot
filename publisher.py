@@ -1,69 +1,79 @@
+# publisher.py
 import cv2
-import mediapipe as mp
-import numpy as np
-import pika #kkkkkkk
 import json
+import numpy as np
+import pika
+from insightface.app import FaceAnalysis
 
-# carreg os rosto ja cadastrado
-with open("known_faces.json", "r") as f:
-    known_faces = json.load(f)
+DB_PATH = "known_faces.json"
+RABBIT_HOST = "localhost"
+QUEUE_NAME = "access_queue"
+THRESHOLD_SIM = 0.35  # sim >= 0.35 => mesmo rosto (ajuste conforme seus dados)
 
-mp_face = mp.solutions.face_detection
-cap = cv2.VideoCapture(0)
+# Carrega base
+with open(DB_PATH, "r", encoding="utf-8") as f:
+    db = json.load(f)
 
-# confiuração do rabbit
-connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+names, centroids = [], []
+for name, data in db.items():
+    if isinstance(data, dict) and "centroid" in data:
+        names.append(name)
+        centroids.append(np.array(data["centroid"], dtype=np.float32))
+centroids = np.stack(centroids, axis=0) if centroids else np.zeros((0, 512), dtype=np.float32)
+
+# InsightFace
+app = FaceAnalysis(name="buffalo_l")
+app.prepare(ctx_id=0, det_size=(640, 640))
+
+# RabbitMQ (fila durável)
+connection = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
 channel = connection.channel()
-channel.queue_declare(queue='access_queue')
+channel.queue_declare(queue=QUEUE_NAME, durable=True)
 
-def compare_face(face_encoding):
-    for name, known_encoding in known_faces.items():
-        distance = np.linalg.norm(np.array(known_encoding) - np.array(face_encoding))
-        if distance < 50:
-            return name
-    return None
+def publish(event: dict):
+    channel.basic_publish(
+        exchange="",
+        routing_key=QUEUE_NAME,
+        body=json.dumps(event),
+        properties=pika.BasicProperties(delivery_mode=2)  # persistente
+    )
 
-with mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            continue
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_detection.process(rgb)
-#poha
-        if results.detections:
-            for detection in results.detections:
-                bbox = detection.location_data.relative_bounding_box
-                h, w, _ = frame.shape
-                x1 = int(bbox.xmin * w)
-                y1 = int(bbox.ymin * h)
-                x2 = int((bbox.xmin + bbox.width) * w)
-                y2 = int((bbox.ymin + bbox.height) * h)
+cap = cv2.VideoCapture(0)
+print("Reconhecimento iniciado. Pressione 'q' para sair.")
 
-                # desenha retanggulo no rosto
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        continue
 
-                face_img = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
-                face_encoding = np.mean(face_img, axis=(0,1)).tolist()
-                person = compare_face(face_encoding)
-                status = "Liberado" if person else "Negado"
-                event = {"person": person if person else "Desconhecido", "status": status}
-                
-                # Eenvia pra o rabbit mq 
-                channel.basic_publish(exchange='', routing_key='access_queue', body=json.dumps(event))
-                
-                # mostra status na tela
-                cv2.putText(frame, f"{person if person else 'Desconhecido'} - {status}", 
-                            (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
-                
-                print(event)
+    faces = app.get(frame)
+    for face in faces:
+        x1, y1, x2, y2 = map(int, face.bbox)
+        emb = face.normed_embedding  # [512], L2-normalizado
+        if emb is None or centroids.shape[0] == 0:
+            name, status, sim = "Desconhecido", "Negado", None
+        else:
+            # similaridade por produto interno (como é L2-normalizado = cosseno)
+            sims = centroids @ emb.astype(np.float32)
+            best_idx = int(np.argmax(sims))
+            best_sim = float(sims[best_idx])
+            if best_sim >= THRESHOLD_SIM:
+                name, status, sim = names[best_idx], "Liberado", best_sim
+            else:
+                name, status, sim = "Desconhecido", "Negado", best_sim
 
-        # agora presto essa poha da camera
-        cv2.imshow("Reconhecimento Facial", frame) # inicia a camera
+        event = {"person": name, "status": status, "similarity": round(sim, 4) if sim is not None else None}
+        publish(event)
+        print("Evento:", event)
 
-        # Sai com q
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        color = (0, 200, 0) if status == "Liberado" else (0, 0, 255)
+        label = f"{name} - {status}" + (f" ({sim:.2f})" if sim is not None else "")
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, label, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    cv2.imshow("Reconhecimento Facial", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
 cap.release()
 cv2.destroyAllWindows()

@@ -1,36 +1,37 @@
 # consume.py
-import pika
-import json
-import csv
+from flask import Flask, request, jsonify
 from datetime import datetime
+import csv
+import os
 
-RABBIT_HOST = "localhost"
-QUEUE_NAME = "access_queue"
+app = Flask(__name__)
 CSV_PATH = "access_log.csv"
 
-connection = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
-channel = connection.channel()
-channel.queue_declare(queue=QUEUE_NAME, durable=True)
-
-def callback(ch, method, properties, body):
+@app.route("/event", methods=["POST"])
+def receive_event():
     try:
-        event = json.loads(body)
-        print("Evento recebido:", event)
+        event = request.get_json(force=True)
+        if not event:
+            return jsonify({"error": "JSON vazio"}), 400
+
+        # Garante que o arquivo existe e grava o evento
+        os.makedirs(os.path.dirname(CSV_PATH) or ".", exist_ok=True)
         with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 event.get("person"),
                 event.get("status"),
-                event.get("similarity")
+                event.get("similarity"),
             ])
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        print("✅ Evento recebido:", event)
+        return jsonify({"status": "ok"}), 200
+
     except Exception as e:
-        print("Erro ao processar mensagem:", e)
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        print("❌ Erro ao processar evento:", e)
+        return jsonify({"error": str(e)}), 500
 
-channel.basic_qos(prefetch_count=1)
-channel.basic_consume(queue=QUEUE_NAME, on_message_callback=callback, auto_ack=False)
-
-print("Esperando eventos...")
-channel.start_consuming()
+if __name__ == "__main__":
+    print("🌐 Servidor de eventos iniciado em http://localhost:8000/event")
+    app.run(host="0.0.0.0", port=8000)

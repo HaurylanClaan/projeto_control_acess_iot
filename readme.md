@@ -1,172 +1,200 @@
-# 🧠 Sistema de Reconhecimento Facial com AMQP (RabbitMQ) e IoT
+# 🧠 Sistema de Reconhecimento Facial com Flask e Integração IoT via HTTP
 
-Projeto desenvolvido na disciplina **Aplicações de Cloud, IoT e Indústria 4.0 em Python**, com foco em integrar **hardware e software** usando o protocolo **AMQP (Advanced Message Queuing Protocol)** através do **RabbitMQ**.
-
------------------------------------------------------------------------------------------------------------------------------------
+Projeto desenvolvido na disciplina **Aplicações de Cloud, IoT e Indústria 4.0 em Python**, com foco em integrar **hardware e software** usando **comunicação HTTP**.
+O reconhecimento facial é feito diretamente pelo servidor Flask, que recebe imagens enviadas via HTTP.
 
 ## 📘 Visão Geral
 
 O sistema implementa um **controle de acesso inteligente** que utiliza **reconhecimento facial** para autorizar ou negar o acesso de pessoas.  
-Cada evento de reconhecimento é publicado e consumido via **RabbitMQ**, simulando o comportamento de uma aplicação **IoT distribuída**.
+O processo ocorre da seguinte forma:
 
-A arquitetura se divide em três módulos principais:
-
-| Módulo       | Função                                                   |
-|--------------|----------------------------------------------------------|
-| `enroll.py`  | Captura e cadastra rostos (gera embeddings faciais).    |
-| `publisher.py` | Reconhece rostos em tempo real e publica eventos AMQP. |
-| `consume.py` | Recebe os eventos do RabbitMQ e registra logs de acesso.|
-
------------------------------------------------------------------------------------------------------------------------------------
+1. O **front-end** captura uma imagem facial (webcam ou dispositivo móvel).  
+2. A imagem é enviada via **HTTP (POST)** para o servidor Flask.  
+3. O servidor realiza a **análise facial** com base nos rostos cadastrados.  
+4. O resultado é retornado ao front-end (liberado ou negado).
 
 ## 🧩 Tecnologias Utilizadas
 
 - **Python 3.10+**
-- **InsightFace (ArcFace)** — modelo de embeddings faciais (512-D)
-- **OpenCV** — captura e exibição de vídeo
-- **NumPy** — operações vetoriais
-- **RabbitMQ** — mensageria AMQP
-- **Pika** — cliente Python para RabbitMQ
+- **Flask** — Servidor HTTP e API REST
+- **InsightFace (ArcFace)** — Modelo de reconhecimento facial
+- **OpenCV (headless)** — Processamento de imagem
+- **NumPy** — Operações vetoriais
+- **ONNXRuntime** — Execução dos modelos
+- **Pillow** — Manipulação de imagem
 
------------------------------------------------------------------------------------------------------------------------------------
+
 
 ### ⚙️ Estrutura do Projeto
-
-projeto_control_acess_iot/
-
+```bash
+projeto_control_acess/
 │
-├── enroll.py # Cadastro facial
-├── publisher.py # Reconhecimento + envio AMQP
-├── consume.py # Consumidor RabbitMQ
-├── known_faces.json # Base de rostos cadastrados
-├── access_log.csv # Log dos acessos recebidos (gerado após execução)
+├── consume.py # Servidor Flask principal
+├── known_faces.json # Banco local com rostos cadastrados
 ├── requirements.txt # Dependências do projeto
+├── README.md # Este arquivo
 └── venv/ # Ambiente virtual (não versionado)
+```
 
------------------------------------------------------------------------------------------------------------------------------------
 
 ## 🚀 Instalação e Execução
 
 ### 1️⃣ Criar o ambiente virtual
 ```bash
 python -m venv venv
-
+```
 Ative o ambiente:
-venv\Scripts\activate # Windows
-source venv/bin/activate # Linux/macOS
-
------------------------------------------------------------------------------------------------------------------------------------
-
+```bash
+source venv/bin/activate   # Linux
+venv\Scripts\activate      # Windows
+```
 ### 2️⃣ Instalar dependências
+```bash
 pip install -r requirements.txt
+```
 
------------------------------------------------------------------------------------------------------------------------------------
+### 3️⃣ Executar o servidor Flask
 
-### 🐇 Subir o RabbitMQ
-🔹 Opção A — via Docker (recomendado)
-docker run -d --hostname rabbit --name rabbit \
-  -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+```bash
+python consume.py
+```
+O servidor será iniciado em:
 
-Acesse o painel web:
-👉 http://localhost:15672
-Usuário: guest | Senha: guest
+```bash
+http://127.0.0.1:5000
+```
 
-🔹 Opção B — instalação local
-Baixe e instale o RabbitMQ em: https://www.rabbitmq.com/download.html
+### 📦 Dependências (requirements.txt)
 
------------------------------------------------------------------------------------------------------------------------------------
+- **flask**
+- **insightface==0.7.3**
+- **opencv-python-headless**
+- **numpy<2**
+- **onnxruntime**
+- **pillow**
 
-### 📸 Cadastrar Rostos (enroll)
-Execute: python enroll.py
-Digite o nome da pessoa.
 
-Aponte o rosto para a câmera.
-Pressione:
-s → salva uma amostra facial.
-q → encerra o cadastro.
-Recomenda-se capturar 5 a 10 amostras por pessoa para robustez.
-Após execução, é gerado o arquivo known_faces.json com os embeddings.
+### 📡 Fluxo de Funcionamento
+🧩 Fluxo Simplificado
+```
+sequenceDiagram
+    participant F as Front-end
+    participant S as Servidor Flask
+    participant D as Banco de Rostos (known_faces.json)
 
------------------------------------------------------------------------------------------------------------------------------------
+    F->>S: Envia imagem Base64 via /analise
+    S->>D: Verifica se o rosto já existe
+    D-->>S: Retorna vetor correspondente (ou None)
+    S-->>F: Retorna JSON {"status": "liberado" ou "negado"}
+```
 
-### 🧠 Executar Reconhecimento Facial (publisher)
-execute: python publisher.py
-Este módulo:
+### 🧠 Endpoints da API
+**POST /analise**
 
-Captura rostos da webcam em tempo real.
-Gera embeddings faciais (512-D).
-Compara com os rostos cadastrados (via similaridade).
-Publica evento no RabbitMQ com o resultado (Liberado ou Negado).
+Recebe uma imagem em formato Base64 e retorna se o rosto é reconhecido.
 
-Exemplo de evento publicado:
+**📥 Corpo da requisição (JSON)**
+```bash
 {
-  "person": "Bolsonaro",
-  "status": "Liberado",
-  "similarity": 0.41
+  "imagem": "<string_base64_da_imagem>"
 }
+```
+**📤 Respostas**
 
------------------------------------------------------------------------------------------------------------------------------------
+**✅ Pessoa reconhecida**
 
-### 📥 Consumir Eventos e Log (consume)
-execute: python consume.py
-Este módulo:
+```bash
+{
+  "status": "liberado",
+  "mensagem": "Acesso permitido"
+}
+```
+**✅ Pessoa não reconhecida**
+```bash
+{
+  "status": "negado",
+  "mensagem": "Rosto não encontrado no banco de dados"
+}
+```
 
-Conecta-se ao RabbitMQ na fila access_queue.
-Recebe cada evento público pelo publisher.
-Salva os logs no arquivo access_log.csv.
+### 💾 Banco de Dados Facial (known_faces.json)
 
-Exemplo de log no CSV:
-2025-10-27 17:55:01, Felipe, Liberado, 0.41
-2025-10-27 17:56:22, Desconhecido, Negado, 0.21
+O arquivo known_faces.json armazena os embeddings faciais (representações vetoriais do rosto).
+Cada pessoa cadastrada possui um vetor de 512 dimensões gerado pelo InsightFace.
 
------------------------------------------------------------------------------------------------------------------------------------
+Exemplo:
 
-### 📡 Arquitetura IoT (Simplificada)
-   [Câmera / Edge Device]
-             │
-             ▼
-     ┌───────────────────────────┐
-     │  publisher.py             │
-     │  - Captura vídeo          │
-     │  - Gera embeddings        │
-     │  - Publica evento AMQP    │
-     └───────────────────────────┘
-             │  (AMQP)
-             ▼
-     ┌───────────────────────────┐
-     │  RabbitMQ Broker          │
-     │  - fila access_queue      │
-     └───────────────────────────┘
-             │
-             ▼
-     ┌───────────────────────────┐
-     │  consume.py               │
-     │  - Recebe evento          │
-     │  - Grava log CSV          │
-     └───────────────────────────┘
+```bash
+{
+  "joao_silva": [0.134, -0.248, 0.392, ...],
+  "maria_oliveira": [0.244, -0.109, 0.503, ...]
+}
+```
 
------------------------------------------------------------------------------------------------------------------------------------
+### 🧩 Cadastro de Rostos
 
-### 📈 Ajustando a Precisão
+O cadastro de pessoas é realizado diretamente pelo front-end.
 
-A variável THRESHOLD_SIM (no publisher.py) define a sensibilidade do reconhecimento:
-| Valor   | Descrição                                  |
-| ------- | ------------------------------------------ |
-| `0.30`  | Mais permissivo (ringer pessoas parecidas) |
-| `0.35`  | Equilíbrio perfeito para maioria dos casos |
-| `0.40+` | Mais rigoroso (pode negar pessoas válidas) |
+O front é responsável por:
 
-obs: Ajuste conforme a base de rostos que você capturou.
+Capturar uma imagem da pessoa;
 
------------------------------------------------------------------------------------------------------------------------------------
+Enviar o rosto cadastrado para o servidor (endpoint /cadastro — opcional);
 
-### 🛠️ Possíveis Extensões
+Atualizar o banco de dados known_faces.json.
 
-Liveness Detection: verificar se o rosto é real (por exemplo: piscar, mover cabeça).
-Exchange AMQP com tópicos:
-iot.face.verified
-iot.face.unknown
-iot.face.alert
-Dashboard (Flask ou Streamlit) para visualizar os eventos em tempo real.
-Integração com hardware (Raspberry Pi + relé/LED) para liberar portas ou acionar dispositivos físicos.
-Monitoramento e métricas (por exemplo: Prometheus + Grafana — taxa de reconhecimento, latência).
+Se o rosto não estiver cadastrado, o servidor responde com “bloqueado”.
+
+
+### 📈 Exemplo de Integração com o Front-End
+```bash
+async function enviarImagem(base64) {
+  const response = await fetch("http://127.0.0.1:5000/analise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imagem: base64 })
+  });
+  
+  const data = await response.json();
+  if (data.status === "liberado") {
+    alert("✅ Acesso permitido!");
+  } else {
+    alert("❌ Acesso negado!");
+  }
+}
+```
+### 🧱 Arquitetura Simplificada
+
+```bash
+[Front-end Web]
+    │
+    │  (HTTP POST /analise)
+    ▼
+[Servidor Flask]
+    │
+    │  (Processa e compara rostos)
+    ▼
+[Base Local - known_faces.json]
+
+```
+### ⚙️ Ajustando a Precisão
+
+A variável THRESHOLD_SIMILARITY define o nível de sensibilidade do reconhecimento:
+
+Valor	Descrição
+0.30	Mais permissivo (pode aceitar rostos parecidos)
+0.35	Equilíbrio (recomendado)
+0.40+	Mais rigoroso (pode negar rostos válidos)
+
+### 👨‍💻 Autores
+
+Desenvolvido por:
+- 🧑‍💻 Haurylan Claan (BackEnd)
+- 🧑‍💻 Felipe (BackEnd)
+- 🧑‍💻 Paulo Silas (FrontEnd)
+- 🧑‍💻 Nicolau (FrontEnd)
+- 🧑‍💻 Francivaldo (Documentação)
+- 💡 Projeto acadêmico Iot
+
+## 📄 Licença
+Este projeto é licenciado sob os termos da [Licença MIT](LICENSE).
